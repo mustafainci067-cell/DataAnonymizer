@@ -9,6 +9,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/huh"
@@ -179,6 +180,126 @@ var maskCmd = &cobra.Command{
 			writer.WriteString(colNamesStr + "\n")
 		}
 
+		jobs := make(chan []interface{}, 100)
+		results := make(chan string, 100)
+
+		var workerWg sync.WaitGroup
+		var writerWg sync.WaitGroup
+
+		// Spawn writer goroutine
+		writerWg.Add(1)
+		go func() {
+			defer writerWg.Done()
+			for res := range results {
+				if _, err := writer.WriteString(res); err != nil {
+					log.Fatalf("Failed to write to file: %v", err)
+				}
+			}
+		}()
+
+		// Spawn worker goroutines
+		numWorkers := 50
+		for w := 0; w < numWorkers; w++ {
+			workerWg.Add(1)
+			go func() {
+				defer workerWg.Done()
+				for values := range jobs {
+					var sqlStrValues []string
+					var csvStrValues []string
+					jsonRow := make(map[string]interface{})
+					var rowIdStr string
+
+					// Try to find the id column for deterministic masking
+					for i, col := range columns {
+						if strings.ToLower(col) == "id" {
+							if val, ok := values[i].(int64); ok {
+								rowIdStr = fmt.Sprintf("%d", val)
+							} else if val, ok := values[i].(string); ok {
+								rowIdStr = val
+							}
+						}
+					}
+					if rowIdStr == "" {
+						rowIdStr = "X"
+					}
+
+					for i, col := range columns {
+						val := values[i]
+
+						var strVal string
+						if val != nil {
+							switch v := val.(type) {
+							case string:
+								strVal = v
+							case time.Time:
+								strVal = v.Format("2006-01-02 15:04:05")
+							default:
+								strVal = fmt.Sprintf("%v", v)
+							}
+
+							// Apply masking if rule exists
+							if maskingRules[col] {
+								lowerCol := strings.ToLower(col)
+								if strings.Contains(lowerCol, "name") {
+									strVal = "Anon User " + rowIdStr
+								} else if strings.Contains(lowerCol, "email") {
+									strVal = "user_" + rowIdStr + "@masked.local"
+								} else if strings.Contains(lowerCol, "card") {
+									if len(strVal) >= 4 {
+										strVal = "****-****-****-" + strVal[len(strVal)-4:]
+									} else {
+										strVal = "****-****-****-0000"
+									}
+								} else if strings.Contains(lowerCol, "phone") {
+									strVal = "555-0100"
+								} else if strings.Contains(lowerCol, "password") {
+									strVal = "*****"
+								} else {
+									strVal = "MASKED"
+								}
+							}
+						}
+
+						if fileExt == "jsonl" {
+							if val == nil {
+								jsonRow[col] = nil
+							} else {
+								jsonRow[col] = strVal
+							}
+						} else if fileExt == "csv" {
+							if val == nil {
+								csvStrValues = append(csvStrValues, "")
+							} else {
+								escaped := strVal
+								if strings.Contains(escaped, ",") || strings.Contains(escaped, "\"") || strings.Contains(escaped, "\n") {
+									escaped = "\"" + strings.ReplaceAll(escaped, "\"", "\"\"") + "\""
+								}
+								csvStrValues = append(csvStrValues, escaped)
+							}
+						} else {
+							if val == nil {
+								sqlStrValues = append(sqlStrValues, "NULL")
+							} else {
+								escaped := fmt.Sprintf("'%s'", strings.ReplaceAll(strVal, "'", "''"))
+								sqlStrValues = append(sqlStrValues, escaped)
+							}
+						}
+					}
+
+					var resultStr string
+					if fileExt == "jsonl" {
+						jsonData, _ := json.Marshal(jsonRow)
+						resultStr = string(jsonData) + "\n"
+					} else if fileExt == "csv" {
+						resultStr = strings.Join(csvStrValues, ",") + "\n"
+					} else {
+						resultStr = fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);\n", targetTable, colNamesStr, strings.Join(sqlStrValues, ", "))
+					}
+					results <- resultStr
+				}
+			}()
+		}
+
 		for rows.Next() {
 			// Create a slice of interface{} to hold generic values
 			values := make([]interface{}, len(columns))
@@ -191,102 +312,28 @@ var maskCmd = &cobra.Command{
 				log.Fatalf("Failed to scan row: %v", err)
 			}
 
-			var sqlStrValues []string
-			var csvStrValues []string
-			jsonRow := make(map[string]interface{})
-			var rowIdStr string
-
-			// Try to find the id column for deterministic masking
-			for i, col := range columns {
-				if strings.ToLower(col) == "id" {
-					if val, ok := values[i].(int64); ok {
-						rowIdStr = fmt.Sprintf("%d", val)
-					} else if val, ok := values[i].([]byte); ok {
-						rowIdStr = string(val)
-					}
-				}
-			}
-			if rowIdStr == "" {
-				rowIdStr = "X"
-			}
-
-			for i, col := range columns {
-				val := values[i]
-
-				var strVal string
-				if val != nil {
+			// Safely copy values to avoid race conditions with driver's underlying byte array reuse
+			safeValues := make([]interface{}, len(columns))
+			for i, val := range values {
+				if val == nil {
+					safeValues[i] = nil
+				} else {
 					switch v := val.(type) {
 					case []byte:
-						strVal = string(v)
-					case time.Time:
-						strVal = v.Format("2006-01-02 15:04:05")
+						safeValues[i] = string(v)
 					default:
-						strVal = fmt.Sprintf("%v", v)
-					}
-
-					// Apply masking if rule exists
-					if maskingRules[col] {
-						lowerCol := strings.ToLower(col)
-						if strings.Contains(lowerCol, "name") {
-							strVal = "Anon User " + rowIdStr
-						} else if strings.Contains(lowerCol, "email") {
-							strVal = "user_" + rowIdStr + "@masked.local"
-						} else if strings.Contains(lowerCol, "card") {
-							if len(strVal) >= 4 {
-								strVal = "****-****-****-" + strVal[len(strVal)-4:]
-							} else {
-								strVal = "****-****-****-0000"
-							}
-						} else if strings.Contains(lowerCol, "phone") {
-							strVal = "555-0100"
-						} else if strings.Contains(lowerCol, "password") {
-							strVal = "*****"
-						} else {
-							strVal = "MASKED"
-						}
-					}
-				}
-
-				if fileExt == "jsonl" {
-					if val == nil {
-						jsonRow[col] = nil
-					} else {
-						jsonRow[col] = strVal
-					}
-				} else if fileExt == "csv" {
-					if val == nil {
-						csvStrValues = append(csvStrValues, "")
-					} else {
-						escaped := strVal
-						if strings.Contains(escaped, ",") || strings.Contains(escaped, "\"") || strings.Contains(escaped, "\n") {
-							escaped = "\"" + strings.ReplaceAll(escaped, "\"", "\"\"") + "\""
-						}
-						csvStrValues = append(csvStrValues, escaped)
-					}
-				} else {
-					if val == nil {
-						sqlStrValues = append(sqlStrValues, "NULL")
-					} else {
-						escaped := fmt.Sprintf("'%s'", strings.ReplaceAll(strVal, "'", "''"))
-						sqlStrValues = append(sqlStrValues, escaped)
+						safeValues[i] = v
 					}
 				}
 			}
 
-			if fileExt == "jsonl" {
-				jsonData, _ := json.Marshal(jsonRow)
-				_, err = writer.WriteString(string(jsonData) + "\n")
-			} else if fileExt == "csv" {
-				_, err = writer.WriteString(strings.Join(csvStrValues, ",") + "\n")
-			} else {
-				insertStmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);\n", targetTable, colNamesStr, strings.Join(sqlStrValues, ", "))
-				_, err = writer.WriteString(insertStmt)
-			}
-
-			if err != nil {
-				log.Fatalf("Failed to write to file: %v", err)
-			}
+			jobs <- safeValues
 		}
+
+		close(jobs)
+		workerWg.Wait()
+		close(results)
+		writerWg.Wait()
 
 		if err = rows.Err(); err != nil {
 			log.Fatalf("Error iterating rows: %v", err)
