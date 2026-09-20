@@ -7,5 +7,8 @@ db_conn: "host=localhost port=5432 user=admin password=password dbname=anonymize
 # The table you want to mask
 target_table: "customers"
 
+# Export Format (SQL, CSV, JSONL)
+export_format: "JSONL"
+
 # Automatically mask discovered PII columns based on regex
 auto_mask: true

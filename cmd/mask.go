@@ -3,6 +3,7 @@ package cmd
 import (
 	"bufio"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -21,6 +22,7 @@ var maskCmd = &cobra.Command{
 	Short: "Mask PII in the database and output SQL dump",
 	Run: func(cmd *cobra.Command, args []string) {
 		var targetTable string
+		var exportFormat string
 		var ready bool
 		headless := false
 		autoMaskYAML := false
@@ -32,10 +34,15 @@ var maskCmd = &cobra.Command{
 		if err := viper.ReadInConfig(); err == nil {
 			headless = true
 			targetTable = viper.GetString("target_table")
+			exportFormat = viper.GetString("export_format")
+			if exportFormat == "" {
+				exportFormat = "SQL"
+			}
 			autoMaskYAML = viper.GetBool("auto_mask")
 			ready = true
 			fmt.Println("Headless mode active: reading from anonymizer.yaml")
 		} else {
+			exportFormat = "SQL" // default
 			form := huh.NewForm(
 				huh.NewGroup(
 					huh.NewSelect[string]().
@@ -44,6 +51,14 @@ var maskCmd = &cobra.Command{
 							huh.NewOption("customers", "customers"),
 						).
 						Value(&targetTable),
+					huh.NewSelect[string]().
+						Title("Choose Export Format:").
+						Options(
+							huh.NewOption("SQL", "SQL"),
+							huh.NewOption("CSV", "CSV"),
+							huh.NewOption("JSONL", "JSONL"),
+						).
+						Value(&exportFormat),
 					huh.NewConfirm().
 						Title("Are you ready to start the O(1) streaming anonymization process?").
 						Affirmative("Yes").
@@ -140,7 +155,15 @@ var maskCmd = &cobra.Command{
 		}
 		defer rows.Close()
 
-		file, err := os.Create("anonymized_dump.sql")
+		fileExt := strings.ToLower(exportFormat)
+		if fileExt == "jsonl" || fileExt == "csv" {
+			// already set
+		} else {
+			fileExt = "sql"
+		}
+		fileName := fmt.Sprintf("anonymized_dump.%s", fileExt)
+
+		file, err := os.Create(fileName)
 		if err != nil {
 			log.Fatalf("Failed to create file: %v", err)
 		}
@@ -149,8 +172,12 @@ var maskCmd = &cobra.Command{
 		writer := bufio.NewWriter(file)
 		defer writer.Flush()
 
-		// For formatting generic inserts
+		// For formatting generic inserts and CSV headers
 		colNamesStr := strings.Join(columns, ", ")
+
+		if fileExt == "csv" {
+			writer.WriteString(colNamesStr + "\n")
+		}
 
 		for rows.Next() {
 			// Create a slice of interface{} to hold generic values
@@ -164,7 +191,9 @@ var maskCmd = &cobra.Command{
 				log.Fatalf("Failed to scan row: %v", err)
 			}
 
-			var strValues []string
+			var sqlStrValues []string
+			var csvStrValues []string
+			jsonRow := make(map[string]interface{})
 			var rowIdStr string
 
 			// Try to find the id column for deterministic masking
@@ -185,9 +214,7 @@ var maskCmd = &cobra.Command{
 				val := values[i]
 
 				var strVal string
-				if val == nil {
-					strVal = "NULL"
-				} else {
+				if val != nil {
 					switch v := val.(type) {
 					case []byte:
 						strVal = string(v)
@@ -218,15 +245,44 @@ var maskCmd = &cobra.Command{
 							strVal = "MASKED"
 						}
 					}
-					// Wrap in quotes if it's not NULL
-					strVal = fmt.Sprintf("'%s'", strings.ReplaceAll(strVal, "'", "''"))
 				}
-				strValues = append(strValues, strVal)
+
+				if fileExt == "jsonl" {
+					if val == nil {
+						jsonRow[col] = nil
+					} else {
+						jsonRow[col] = strVal
+					}
+				} else if fileExt == "csv" {
+					if val == nil {
+						csvStrValues = append(csvStrValues, "")
+					} else {
+						escaped := strVal
+						if strings.Contains(escaped, ",") || strings.Contains(escaped, "\"") || strings.Contains(escaped, "\n") {
+							escaped = "\"" + strings.ReplaceAll(escaped, "\"", "\"\"") + "\""
+						}
+						csvStrValues = append(csvStrValues, escaped)
+					}
+				} else {
+					if val == nil {
+						sqlStrValues = append(sqlStrValues, "NULL")
+					} else {
+						escaped := fmt.Sprintf("'%s'", strings.ReplaceAll(strVal, "'", "''"))
+						sqlStrValues = append(sqlStrValues, escaped)
+					}
+				}
 			}
 
-			insertStmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);\n", targetTable, colNamesStr, strings.Join(strValues, ", "))
+			if fileExt == "jsonl" {
+				jsonData, _ := json.Marshal(jsonRow)
+				_, err = writer.WriteString(string(jsonData) + "\n")
+			} else if fileExt == "csv" {
+				_, err = writer.WriteString(strings.Join(csvStrValues, ",") + "\n")
+			} else {
+				insertStmt := fmt.Sprintf("INSERT INTO %s (%s) VALUES (%s);\n", targetTable, colNamesStr, strings.Join(sqlStrValues, ", "))
+				_, err = writer.WriteString(insertStmt)
+			}
 
-			_, err = writer.WriteString(insertStmt)
 			if err != nil {
 				log.Fatalf("Failed to write to file: %v", err)
 			}
@@ -236,7 +292,7 @@ var maskCmd = &cobra.Command{
 			log.Fatalf("Error iterating rows: %v", err)
 		}
 
-		fmt.Println("Successfully processed data and exported to anonymized_dump.sql")
+		fmt.Printf("Successfully processed data and exported to %s\n", fileName)
 	},
 }
 
