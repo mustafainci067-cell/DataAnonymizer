@@ -13,6 +13,7 @@ import (
 	"github.com/charmbracelet/huh"
 	_ "github.com/lib/pq"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 )
 
 var maskCmd = &cobra.Command{
@@ -21,26 +22,40 @@ var maskCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		var targetTable string
 		var ready bool
+		headless := false
+		autoMaskYAML := false
 
-		form := huh.NewForm(
-			huh.NewGroup(
-				huh.NewSelect[string]().
-					Title("Choose the target table to mask:").
-					Options(
-						huh.NewOption("customers", "customers"),
-					).
-					Value(&targetTable),
-				huh.NewConfirm().
-					Title("Are you ready to start the O(1) streaming anonymization process?").
-					Affirmative("Yes").
-					Negative("No").
-					Value(&ready),
-			),
-		)
+		viper.SetConfigName("anonymizer")
+		viper.SetConfigType("yaml")
+		viper.AddConfigPath(".")
 
-		if err := form.Run(); err != nil {
-			fmt.Println("\nProcess cancelled.")
-			os.Exit(0)
+		if err := viper.ReadInConfig(); err == nil {
+			headless = true
+			targetTable = viper.GetString("target_table")
+			autoMaskYAML = viper.GetBool("auto_mask")
+			ready = true
+			fmt.Println("Headless mode active: reading from anonymizer.yaml")
+		} else {
+			form := huh.NewForm(
+				huh.NewGroup(
+					huh.NewSelect[string]().
+						Title("Choose the target table to mask:").
+						Options(
+							huh.NewOption("customers", "customers"),
+						).
+						Value(&targetTable),
+					huh.NewConfirm().
+						Title("Are you ready to start the O(1) streaming anonymization process?").
+						Affirmative("Yes").
+						Negative("No").
+						Value(&ready),
+				),
+			)
+
+			if err := form.Run(); err != nil {
+				fmt.Println("\nProcess cancelled.")
+				os.Exit(0)
+			}
 		}
 
 		if !ready {
@@ -91,20 +106,25 @@ var maskCmd = &cobra.Command{
 
 		if len(sensitiveCols) > 0 {
 			var autoMask bool
-			promptText := fmt.Sprintf("Detected %d sensitive columns: %v. Do you want to auto-mask them?", len(sensitiveCols), sensitiveCols)
 
-			confirmForm := huh.NewForm(
-				huh.NewGroup(
-					huh.NewConfirm().
-						Title(promptText).
-						Affirmative("Yes").
-						Negative("No").
-						Value(&autoMask),
-				),
-			)
-			if err := confirmForm.Run(); err != nil {
-				fmt.Println("\nProcess cancelled.")
-				os.Exit(0)
+			if headless {
+				autoMask = autoMaskYAML
+			} else {
+				promptText := fmt.Sprintf("Detected %d sensitive columns: %v. Do you want to auto-mask them?", len(sensitiveCols), sensitiveCols)
+
+				confirmForm := huh.NewForm(
+					huh.NewGroup(
+						huh.NewConfirm().
+							Title(promptText).
+							Affirmative("Yes").
+							Negative("No").
+							Value(&autoMask),
+					),
+				)
+				if err := confirmForm.Run(); err != nil {
+					fmt.Println("\nProcess cancelled.")
+					os.Exit(0)
+				}
 			}
 
 			if !autoMask {

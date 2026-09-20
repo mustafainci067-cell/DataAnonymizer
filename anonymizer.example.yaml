@@ -1,0 +1,11 @@
+# Example configuration for Data Anonymizer CLI Headless Mode
+# Rename this file to anonymizer.yaml to enable headless execution
+
+# The target PostgreSQL database connection string
+db_conn: "host=localhost port=5432 user=admin password=password dbname=anonymizer_sandbox sslmode=disable"
+
+# The table you want to mask
+target_table: "customers"
+
+# Automatically mask discovered PII columns based on regex
+auto_mask: true
