@@ -7,8 +7,14 @@
 - [x] Docker Sandbox Environment (PostgreSQL 15 + dummy data)
 - [x] Version Control (Git Init & Initial Commit)
 
-## Phase 2: Database Connection & Schema Inspection (In Progress)
-- [ ] Connect to local PostgreSQL database
-- [ ] Retrieve column names and data types from the `customers` table
-- [ ] Print schema information to the terminal
-- [ ] Verify connection and schema inspection logic
+## Phase 2: Database Connection & Schema Inspection (Completed)
+- [x] Connect to local PostgreSQL database
+- [x] Retrieve column names and data types from the `customers` table
+- [x] Print schema information to the terminal
+- [x] Verify connection and schema inspection logic
+
+## Phase 3: The Anonymization Engine (Streaming & Masking) (In Progress)
+- [ ] Connect to DB and query `customers` table with streaming (`rows.Next()`)
+- [ ] Apply on-the-fly GDPR masking rules (full_name, email, credit_card)
+- [ ] Export directly to `anonymized_dump.sql` via `bufio.Writer`
+- [ ] Verify masked output file is correct
