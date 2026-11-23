@@ -1,0 +1,36 @@
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+data-anonymizer
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Generated dumps, configs, local DBs & temp artifacts
+anonymized_dump.*
+*.sql.gz
+*.csv.gz
+*.jsonl.gz
+audit_report.*
+anonymizer.yaml
+*.db
+*.sqlite
+*.tmp

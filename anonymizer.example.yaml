@@ -1,0 +1,51 @@
+# Example configuration for Data Anonymizer CLI (Headless Mode)
+# Copy or rename this file to anonymizer.yaml (or pass --config <path>)
+
+# Database driver: postgres | mysql | sqlite
+driver: "postgres"
+
+# Database connection string (or use DATABASE_URL / ANONYMIZER_DSN env var)
+db_conn: "postgres://admin:password@localhost:5432/anonymizer_sandbox?sslmode=disable"
+
+# Target schema (defaults to "public" for PostgreSQL)
+schema: "public"
+
+# One or more target tables (use ["*"] to export all tables; target_table is also supported)
+tables:
+  - "customers"
+
+# Export format: sql | copy | csv | jsonl
+export_format: "sql"
+
+# Output destination file (append .gz for gzip compression) or "-" for stdout
+output: "anonymized_dump.sql"
+
+# Automatically mask PII columns discovered by column name or sampled content
+auto_mask: true
+
+# Include CREATE TABLE IF NOT EXISTS statements in SQL/COPY exports
+include_ddl: true
+
+# Number of concurrent masking worker goroutines (0 = runtime.NumCPU())
+workers: 8
+
+# Secret HMAC-SHA256 salt for deterministic cross-table masking (or set ANONYMIZER_SALT env var)
+# Leave empty to generate a fresh cryptographically random ephemeral salt per run.
+salt: "replace-with-a-secret-salt-in-production"
+
+# Rows sampled per table for content-based PII detection (0 disables content sampling)
+content_sample_size: 100
+
+# Optional GDPR/KVKK compliance audit report path (.json or .md)
+audit_output: "audit_report.md"
+
+# Optional per-table/column explicit masking rules (override auto-discovery).
+# Supported strategies: fake_name, fake_email, fake_phone, credit_card, tckn,
+# iban, hmac_hash, password, address, ip, nullify, redact, keep
+rules:
+  customers:
+    email: "fake_email"
+    full_name: "fake_name"
+    credit_card: "credit_card"
+  "*":
+    internal_notes: "redact"
