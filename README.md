@@ -1,6 +1,7 @@
 # Data Anonymizer CLI
 
 ![Go Version](https://img.shields.io/badge/Go-1.26+-00ADD8?style=for-the-badge&logo=go)
+![CI](https://github.com/mustafainci067-cell/data-anonymizer/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)
 
 ## The Problem
